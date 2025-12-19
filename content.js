@@ -6,7 +6,7 @@ const processedSignatures = new Map();
 const HISTORY_TTL_MS = 3 * 60 * 1000;
 
 let config = {
-  enabled: true, speakerId: 3, speed: 1.2, volume: 1.0,
+  enabled: true, speakerId: 3, speed: 1.0, volume: 1.0,
   maxLength: 50, readName: false, ignoreCommand: true,
   skipTime: 3,
   blockList: "", audioDeviceId: "",
