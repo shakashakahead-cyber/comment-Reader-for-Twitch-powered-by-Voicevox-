@@ -1,9 +1,9 @@
 // content.js
 console.log("=== Voicevox Reader: Balanced Version ===");
 
-// ■ 履歴管理
-const processedSignatures = new Set();
-const MAX_HISTORY = 500;
+// ■ 履歴管理（時間窓で重複判定）
+const processedSignatures = new Map();
+const HISTORY_TTL_MS = 3 * 60 * 1000;
 
 let config = {
   enabled: true, speakerId: 3, speed: 1.2, volume: 1.0,
@@ -76,6 +76,9 @@ const observer = new MutationObserver((mutations) => {
 function processMessageContainer(container) {
   if (container.dataset.voxRead) return;
 
+  const now = Date.now();
+  pruneHistory(now);
+
   const userEl = container.querySelector('.chat-line__username');
   if (!userEl) return;
 
@@ -121,7 +124,7 @@ function processMessageContainer(container) {
   // ★修正: 判定を「過去3分までOK」に緩和しました
   if (timeStr && !isRecentMessage(timeStr)) {
     container.dataset.voxRead = "true";
-    addHistory(signature);
+    addHistory(signature, now);
     return;
   }
 
@@ -139,7 +142,7 @@ function processMessageContainer(container) {
 
   // ■■■ 読み上げ実行 ■■■
 
-  addHistory(signature);
+  addHistory(signature, now);
   container.dataset.voxRead = "true";
 
   let speakText = text.replace(/https?:\/\/[^\s]+/g, "URL");
@@ -188,11 +191,15 @@ function processMessageContainer(container) {
   }
 }
 
-function addHistory(sig) {
-  processedSignatures.add(sig);
-  if (processedSignatures.size > MAX_HISTORY) {
-    const oldest = processedSignatures.values().next().value;
-    processedSignatures.delete(oldest);
+function addHistory(sig, now) {
+  processedSignatures.set(sig, now);
+}
+
+function pruneHistory(now) {
+  for (const [sig, timestamp] of processedSignatures.entries()) {
+    if (now - timestamp > HISTORY_TTL_MS) {
+      processedSignatures.delete(sig);
+    }
   }
 }
 

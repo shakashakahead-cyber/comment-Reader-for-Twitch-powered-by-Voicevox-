@@ -40,3 +40,7 @@ Twitch の配信マネージャー上のコメントを、ローカルの VOICEV
 
 ## ライセンス
 MIT License
+
+## Links
+- Chrome Web Store: https://chromewebstore.google.com/detail/comment-reader-for-twitch/eolabmdepbcdcppfdmkibgjffiifndkd
+- Privacy Policy: https://shakashakahead.com/privacy/voicevox-comment-reader/

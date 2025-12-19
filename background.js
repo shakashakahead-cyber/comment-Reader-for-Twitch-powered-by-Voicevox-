@@ -42,14 +42,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 2. 読み上げリクエスト（Content/Popup -> Background -> Offscreen）
   if (request.type === "SPEAK_REQUEST") {
     (async () => {
-      // Offscreenがなければ作る
-      await setupOffscreenDocument('offscreen.html');
-      // Offscreenに転送
-      chrome.runtime.sendMessage({
-        type: "PLAY_AUDIO",
-        payload: request.payload
-      });
+      try {
+        // Offscreenがなければ作る
+        await setupOffscreenDocument('offscreen.html');
+        // Offscreenに転送
+        chrome.runtime.sendMessage({
+          type: "PLAY_AUDIO",
+          payload: request.payload
+        });
+        sendResponse({ success: true });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
     })();
-    return false; // 非同期レスポンス不要（投げっぱなし）
+    return true; // 非同期でsendResponseを返す
   }
 });
