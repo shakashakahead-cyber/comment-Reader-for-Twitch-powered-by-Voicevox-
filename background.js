@@ -1,5 +1,5 @@
 // background.js
-console.log("=== Background Service Worker ===");
+
 
 // Offscreenドキュメントの作成管理
 let creating; // 作成中のPromiseを保持

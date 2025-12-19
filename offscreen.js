@@ -12,7 +12,7 @@ chrome.runtime.onMessage.addListener((request) => {
     const payload = request.payload;
 
     if (payload.uniqueId && playedIds.has(payload.uniqueId)) {
-      console.log("Duplicate skipped:", payload.text);
+
       return;
     }
 
@@ -29,7 +29,7 @@ chrome.runtime.onMessage.addListener((request) => {
 
   // ▼▼▼ 追加: キュークリア処理 ▼▼▼
   if (request.type === "CLEAR_QUEUE") {
-    console.log("Queue cleared manually.");
+
     audioQueue = []; // キューを空にする
     isPlaying = false;
     // 現在再生中の音声を止める簡単な方法は、ページをリロードするか、

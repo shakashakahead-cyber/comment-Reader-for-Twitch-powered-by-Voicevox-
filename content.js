@@ -1,5 +1,5 @@
 // content.js
-console.log("=== Voicevox Reader: Balanced Version ===");
+
 
 // ■ 履歴管理（時間窓で重複判定）
 const processedSignatures = new Map();
