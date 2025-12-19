@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Twitch Reader - 読み替え辞書設定</title>
+    <style>
+        body {
+            font-family: "Segoe UI", sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+            background: #f9f9f9;
+        }
+
+        h1 {
+            font-size: 20px;
+            border-bottom: 2px solid #9147ff;
+            padding-bottom: 10px;
+            color: #333;
+        }
+
+        .description {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 20px;
+        }
+
+        .dictionary-list {
+            margin-bottom: 20px;
+        }
+
+        .entry {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            flex: 1;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #9147ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #772ce8;
+        }
+
+        button.remove {
+            background: #d32f2f;
+        }
+
+        button.remove:hover {
+            background: #b71c1c;
+        }
+
+        .actions {
+            margin-top: 20px;
+            border-top: 1px solid #ddd;
+            padding-top: 20px;
+            text-align: right;
+        }
+
+        #status {
+            margin-right: 10px;
+            color: #28a745;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.5s;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>読み替え辞書設定</h1>
+    <p class="description">
+        特定の単語を別の読み方に置換します。<br>
+        例: 「k4sen」→「かせん」、「ｗ」→「わら」
+    </p>
+
+    <div id="list" class="dictionary-list">
+        <!-- Entries will be added here -->
+    </div>
+
+    <button id="addBtn">+ 追加</button>
+
+    <div class="actions">
+        <span id="status">保存しました</span>
+        <button id="saveBtn">保存する</button>
+    </div>
+
+    <script src="options.js"></script>
+</body>
+
+</html>

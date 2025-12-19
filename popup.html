@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* 全体のリセットと基本設定 */
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 320px;
+      padding: 12px;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background-color: #f9f9f9;
+      margin: 0;
+    }
+
+    /* 見出し */
+    h2 {
+      margin: 0 0 10px 0;
+      font-size: 15px;
+      color: #333;
+      border-bottom: 2px solid #9147ff;
+      padding-bottom: 5px;
+    }
+
+    /* グループボックス */
+    .group {
+      margin-bottom: 12px;
+      background: #fff;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    }
+
+    /* ラベルと入力フォーム */
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: bold;
+      font-size: 12px;
+      color: #555;
+    }
+
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    textarea {
+      height: 45px;
+      resize: none;
+      font-family: monospace;
+      font-size: 11px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      margin: 5px 0;
+      cursor: pointer;
+    }
+
+    input[type="checkbox"] {
+      transform: scale(1.1);
+      margin-right: 5px;
+      vertical-align: middle;
+      cursor: pointer;
+    }
+
+    /* ボタン */
+    button {
+      width: 100%;
+      padding: 6px;
+      border: none;
+      border-radius: 4px;
+      background-color: #9147ff;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 5px;
+      font-size: 12px;
+    }
+
+    button:hover {
+      background-color: #772ce8;
+    }
+
+    button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+
+    /* 小さな補助ボタン（権限・再接続用） */
+    .btn-small {
+      background-color: #eee;
+      color: #555;
+      font-size: 10px;
+      padding: 3px 8px;
+      margin-top: 0;
+      width: auto;
+      float: right;
+    }
+
+    .btn-small:hover {
+      background-color: #ddd;
+    }
+
+    /* ステータス表示 */
+    #connectionStatus {
+      margin-bottom: 10px;
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .status-ok {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .status-error {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    #btnOpenDash {
+      display: inline-block;
+      width: auto;
+      background-color: #721c24;
+      color: white;
+      padding: 3px 10px;
+      margin-left: 8px;
+      font-size: 11px;
+      margin-top: 0;
+    }
+
+    #btnOpenDash:hover {
+      background-color: #a71d2a;
+    }
+
+    .val-label {
+      float: right;
+      color: #9147ff;
+      font-weight: bold;
+      font-size: 11px;
+    }
+
+    .note {
+      font-size: 10px;
+      color: #888;
+      margin-top: 2px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    #status {
+      text-align: center;
+      color: #28a745;
+      font-size: 11px;
+      height: 16px;
+      margin-top: 5px;
+      font-weight: bold;
+      opacity: 0;
+      transition: opacity 0.5s;
+    }
+
+    .credit-note {
+      background-color: #fff3cd;
+      border: 1px solid #ffeeba;
+      color: #856404;
+      font-size: 10px;
+      line-height: 1.4;
+      margin-bottom: 5px;
+    }
+
+    .credit-note strong {
+      display: block;
+      margin-bottom: 3px;
+      color: #533f03;
+    }
+
+    /* ヘッダー行調整 */
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .header-row label {
+      margin-bottom: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Twitch 読み上げ V1.0</h2>
+
+  <div id="connectionStatus" class="status-error" style="display:none;">
+    <span>判定中...</span>
+  </div>
+
+  <div class="group">
+    <label><input type="checkbox" id="enabled"> 読み上げを有効にする</label>
+  </div>
+
+  <div class="group">
+    <label>出力デバイス</label>
+    <select id="audioDeviceId">
+      <option value="">既定のデバイス</option>
+    </select>
+    <button id="btnPermission" type="button" class="btn-small" style="width:100%; margin-top:5px; float:none;">🔄
+      デバイス名が表示されない場合</button>
+  </div>
+
+  <div class="group">
+    <div class="header-row">
+      <label>キャラクター</label>
+      <button id="btnReloadSpeakers" class="btn-small">🔄 再接続</button>
+    </div>
+    <select id="speakerId">
+      <option value="3">読み込み中...</option>
+    </select>
+  </div>
+
+  <div class="group">
+    <label>読み上げ速度 <span id="speedValue" class="val-label">1.2x</span></label>
+    <input type="range" id="speed" min="0.5" max="2.0" step="0.1" value="1.2">
+
+    <label style="margin-top:8px;">音量 <span id="volValue" class="val-label">100%</span></label>
+    <input type="range" id="volume" min="0" max="1" step="0.1" value="1.0">
+
+    <button id="testSpeak" class="outline">🔊 テスト再生</button>
+    <button id="btnClearQueue" class="outline danger" style="background-color:#c00; margin-top:5px;">⏹️
+      読み上げ停止（キュー削除）</button>
+  </div>
+
+  <div class="group">
+    <label>除外設定 (Botなど)</label>
+    <div class="note">除外したいユーザー名をカンマ区切りで入力</div>
+    <textarea id="blockList" placeholder="Nightbot, StreamElements"></textarea>
+  </div>
+
+  <div class="group">
+    <div class="header-row">
+      <label>高度な設定</label>
+      <button id="btnOpenDictionary" class="btn-small" style="width:auto;">📖 辞書設定</button>
+    </div>
+    <div class="row">
+      <span>文字数制限 (文字)</span>
+      <input type="number" id="maxLength" value="50" style="width: 50px;">
+    </div>
+    <div class="row">
+      <span><input type="checkbox" id="readName"> 名前も読む</span>
+    </div>
+    <div class="row">
+      <span><input type="checkbox" id="ignoreCommand"> !コマンドを無視</span>
+    </div>
+  </div>
+
+  <div class="group credit-note">
+    <strong>⚠️ クレジット表記について</strong>
+    配信で利用する際は、使用するキャラクターの利用規約に従い、適切なクレジット表記（例：VOICEVOX:ずんだもん）を行ってください。
+  </div>
+
+  <div id="status">設定は自動保存されます</div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>

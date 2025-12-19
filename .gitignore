@@ -1,0 +1,11 @@
+# OS/filesystem
+.DS_Store
+Thumbs.db
+
+# Chrome extension packages/keys
+*.crx
+*.pem
+*.zip
+
+# Logs
+*.log
