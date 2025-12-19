@@ -13,6 +13,89 @@ let config = {
   dictionary: [] // 辞書初期値
 };
 
+// Active reader lock across dashboard tabs.
+const ACTIVE_READER_KEY = "voxActiveReader";
+const ACTIVE_READER_TTL_MS = 8000;
+const ACTIVE_READER_HEARTBEAT_MS = 2000;
+const readerInstanceId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+let isPrimaryReader = false;
+let lastForcedClaimAt = 0;
+
+function isActiveRecordExpired(record, now) {
+  if (!record || !record.lastSeen) return true;
+  return (now - record.lastSeen) > ACTIVE_READER_TTL_MS;
+}
+
+function setPrimaryFromRecord(record) {
+  isPrimaryReader = !!record && record.id === readerInstanceId;
+}
+
+function claimActiveReader(force = false) {
+  chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
+    const record = items[ACTIVE_READER_KEY];
+    const now = Date.now();
+
+    if (force || isActiveRecordExpired(record, now) || (record && record.id === readerInstanceId)) {
+      chrome.storage.local.set({
+        [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
+      });
+      isPrimaryReader = true;
+      return;
+    }
+
+    isPrimaryReader = false;
+  });
+}
+
+function heartbeatActiveReader() {
+  chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
+    const record = items[ACTIVE_READER_KEY];
+    const now = Date.now();
+
+    if (record && record.id === readerInstanceId) {
+      chrome.storage.local.set({
+        [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
+      });
+      if (!isPrimaryReader) isPrimaryReader = true;
+      return;
+    }
+
+    if (isActiveRecordExpired(record, now)) {
+      chrome.storage.local.set({
+        [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
+      });
+      isPrimaryReader = true;
+      return;
+    }
+
+    isPrimaryReader = false;
+  });
+}
+
+function initActiveReaderLock() {
+  claimActiveReader(false);
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (!changes[ACTIVE_READER_KEY]) return;
+    setPrimaryFromRecord(changes[ACTIVE_READER_KEY].newValue);
+  });
+
+  const claimOnUserAction = () => {
+    const now = Date.now();
+    if (now - lastForcedClaimAt < 1000) return;
+    lastForcedClaimAt = now;
+    claimActiveReader(true);
+  };
+
+  document.addEventListener('pointerdown', claimOnUserAction, true);
+  document.addEventListener('keydown', claimOnUserAction, true);
+
+  setInterval(heartbeatActiveReader, ACTIVE_READER_HEARTBEAT_MS);
+}
+
+initActiveReaderLock();
+
 // ■ 設定読み込み
 chrome.storage.local.get(config, (items) => {
   if (items) Object.assign(config, items);
@@ -27,6 +110,7 @@ const scriptStartTime = Date.now();
 // ■ 監視設定
 const observer = new MutationObserver((mutations) => {
   if (!config.enabled) return;
+  if (!isPrimaryReader) return;
   // 起動直後の誤爆防止バッファ
   if (Date.now() - scriptStartTime < (config.skipTime * 1000)) return;
 
@@ -75,6 +159,7 @@ const observer = new MutationObserver((mutations) => {
 
 function processMessageContainer(container) {
   if (container.dataset.voxRead) return;
+  if (!isPrimaryReader) return;
 
   const now = Date.now();
   pruneHistory(now);
