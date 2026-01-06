@@ -20,6 +20,7 @@ const ACTIVE_READER_HEARTBEAT_MS = 2000;
 const readerInstanceId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 let isPrimaryReader = false;
 let lastForcedClaimAt = 0;
+let heartbeatInterval;
 
 function isActiveRecordExpired(record, now) {
   if (!record || !record.lastSeen) return true;
@@ -31,6 +32,7 @@ function setPrimaryFromRecord(record) {
 }
 
 function claimActiveReader(force = false) {
+  if (!chrome.runtime?.id) return;
   chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
     const record = items[ACTIVE_READER_KEY];
     const now = Date.now();
@@ -48,6 +50,10 @@ function claimActiveReader(force = false) {
 }
 
 function heartbeatActiveReader() {
+  if (!chrome.runtime?.id) {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    return;
+  }
   chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
     const record = items[ACTIVE_READER_KEY];
     const now = Date.now();
@@ -91,7 +97,7 @@ function initActiveReaderLock() {
   document.addEventListener('pointerdown', claimOnUserAction, true);
   document.addEventListener('keydown', claimOnUserAction, true);
 
-  setInterval(heartbeatActiveReader, ACTIVE_READER_HEARTBEAT_MS);
+  heartbeatInterval = setInterval(heartbeatActiveReader, ACTIVE_READER_HEARTBEAT_MS);
 }
 
 initActiveReaderLock();
