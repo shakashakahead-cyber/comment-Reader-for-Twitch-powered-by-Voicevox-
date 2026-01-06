@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Comment Reader for Twitch (powered by Voicevox)",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "TwitchのコメントをVOICEVOXで読み上げる拡張機能です。",
   "permissions": [
     "storage",
