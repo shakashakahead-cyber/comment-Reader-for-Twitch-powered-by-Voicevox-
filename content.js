@@ -21,6 +21,7 @@ const readerInstanceId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 let isPrimaryReader = false;
 let lastForcedClaimAt = 0;
 let heartbeatInterval;
+let observer;
 
 function isActiveRecordExpired(record, now) {
   if (!record || !record.lastSeen) return true;
@@ -31,57 +32,90 @@ function setPrimaryFromRecord(record) {
   isPrimaryReader = !!record && record.id === readerInstanceId;
 }
 
-function claimActiveReader(force = false) {
-  if (!chrome.runtime?.id) return;
-  chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
-    const record = items[ACTIVE_READER_KEY];
-    const now = Date.now();
-
-    if (force || isActiveRecordExpired(record, now) || (record && record.id === readerInstanceId)) {
-      chrome.storage.local.set({
-        [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
-      });
-      isPrimaryReader = true;
-      return;
+function cleanupIfInvalid() {
+  try {
+    // Accessing chrome.runtime.id can throw if context is invalidated
+    if (!chrome.runtime || !chrome.runtime.id) {
+      throw new Error("Context invalid");
     }
+    return false; // Valid
+  } catch (e) {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    if (observer) observer.disconnect();
+    return true; // Invalid
+  }
+}
 
-    isPrimaryReader = false;
-  });
+function claimActiveReader(force = false) {
+  if (cleanupIfInvalid()) return;
+
+  try {
+    chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
+      if (cleanupIfInvalid()) return;
+
+      // Check for runtime.lastError to avoid "unchecked runtime.lastError"
+      if (chrome.runtime.lastError) {
+        console.debug("Ignored runtime error in claimActiveReader:", chrome.runtime.lastError);
+        return;
+      }
+
+      const record = items[ACTIVE_READER_KEY];
+      const now = Date.now();
+
+      if (force || isActiveRecordExpired(record, now) || (record && record.id === readerInstanceId)) {
+        chrome.storage.local.set({
+          [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
+        });
+        isPrimaryReader = true;
+        return;
+      }
+
+      isPrimaryReader = false;
+    });
+  } catch (e) { cleanupIfInvalid(); }
 }
 
 function heartbeatActiveReader() {
-  if (!chrome.runtime?.id) {
-    if (heartbeatInterval) clearInterval(heartbeatInterval);
-    return;
-  }
-  chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
-    const record = items[ACTIVE_READER_KEY];
-    const now = Date.now();
+  if (cleanupIfInvalid()) return;
 
-    if (record && record.id === readerInstanceId) {
-      chrome.storage.local.set({
-        [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
-      });
-      if (!isPrimaryReader) isPrimaryReader = true;
-      return;
-    }
+  try {
+    chrome.storage.local.get([ACTIVE_READER_KEY], (items) => {
+      if (cleanupIfInvalid()) return;
 
-    if (isActiveRecordExpired(record, now)) {
-      chrome.storage.local.set({
-        [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
-      });
-      isPrimaryReader = true;
-      return;
-    }
+      if (chrome.runtime.lastError) {
+        console.debug("Ignored runtime error in heartbeatActiveReader:", chrome.runtime.lastError);
+        return;
+      }
 
-    isPrimaryReader = false;
-  });
+      const record = items[ACTIVE_READER_KEY];
+      const now = Date.now();
+
+      if (record && record.id === readerInstanceId) {
+        chrome.storage.local.set({
+          [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
+        });
+        if (!isPrimaryReader) isPrimaryReader = true;
+        return;
+      }
+
+      if (isActiveRecordExpired(record, now)) {
+        chrome.storage.local.set({
+          [ACTIVE_READER_KEY]: { id: readerInstanceId, lastSeen: now }
+        });
+        isPrimaryReader = true;
+        return;
+      }
+
+      isPrimaryReader = false;
+    });
+  } catch (e) { cleanupIfInvalid(); }
 }
 
 function initActiveReaderLock() {
   claimActiveReader(false);
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (cleanupIfInvalid()) return;
     if (areaName !== "local") return;
     if (!changes[ACTIVE_READER_KEY]) return;
     setPrimaryFromRecord(changes[ACTIVE_READER_KEY].newValue);
@@ -114,7 +148,7 @@ chrome.storage.onChanged.addListener((changes) => {
 const scriptStartTime = Date.now();
 
 // ■ 監視設定
-const observer = new MutationObserver((mutations) => {
+observer = new MutationObserver((mutations) => {
   if (!config.enabled) return;
   if (!isPrimaryReader) return;
   // 起動直後の誤爆防止バッファ
@@ -279,7 +313,8 @@ function processMessageContainer(container) {
       }
     });
   } catch (e) {
-    console.log("Extension context invalidated.");
+    console.log("Extension context invalidated or error sending message:", e);
+    cleanupIfInvalid();
   }
 }
 
