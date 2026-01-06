@@ -7,7 +7,7 @@ const HISTORY_TTL_MS = 3 * 60 * 1000;
 
 let config = {
   enabled: true, speakerId: 3, speed: 1.0, volume: 1.0,
-  maxLength: 50, readName: false, ignoreCommand: true,
+  maxLength: 70, readName: false, ignoreCommand: true,
   skipTime: 3,
   blockList: "", audioDeviceId: "",
   dictionary: [] // 辞書初期値
@@ -147,7 +147,7 @@ const observer = new MutationObserver((mutations) => {
 
   // 一瞬で10件以上来た場合は「再描画」とみなして無視
   // （通常のチャットなら10件同時はまずありえないため）
-  if (addedMessageCount >= 10) {
+  if (addedMessageCount >= 50) {
     console.log(`Mass redraw detected (${addedMessageCount} items). Skipping.`);
     candidates.forEach(c => c.dataset.voxRead = "true");
     return;
@@ -208,6 +208,7 @@ function processMessageContainer(container) {
   // 2. 時刻の新しさチェック（時刻がある場合のみ）
   // ★修正: 判定を「過去3分までOK」に緩和しました
   if (timeStr && !isRecentMessage(timeStr)) {
+    console.log(`Skipped message due to time check: "${text}" (Time: ${timeStr})`);
     container.dataset.voxRead = "true";
     addHistory(signature, now);
     return;
@@ -319,7 +320,7 @@ function isRecentMessage(timeStr) {
 
   // ★ここを緩和: 「1分未来 〜 3分過去」まで許容
   // これにより、分が変わった直後のコメントも弾かれなくなります
-  return diff >= -1 && diff <= 3;
+  return diff >= -10 && diff <= 10;
 }
 
 // 正規表現エスケープ用ヘルパー

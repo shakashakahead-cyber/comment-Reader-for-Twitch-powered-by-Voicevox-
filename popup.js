@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const defaults = {
     enabled: true, speakerId: 3, speed: 1.0, volume: 1.0,
-    maxLength: 50, readName: false, ignoreCommand: true, skipTime: 3,
+    maxLength: 70, readName: false, ignoreCommand: true, skipTime: 3,
     blockList: "", audioDeviceId: ""
   };
 
