@@ -17,14 +17,15 @@
     "128": "icons/icon128.png"
   },
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "src/popup/popup.html"
   },
   "options_ui": {
-    "page": "options.html",
+    "page": "src/options/options.html",
     "open_in_tab": true
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -32,9 +33,20 @@
         "*://dashboard.twitch.tv/*"
       ],
       "js": [
-        "content.js"
+        "src/content/loader.js"
       ],
       "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/content/*.js",
+        "src/lib/*.js"
+      ],
+      "matches": [
+        "*://dashboard.twitch.tv/*"
+      ]
     }
   ]
 }

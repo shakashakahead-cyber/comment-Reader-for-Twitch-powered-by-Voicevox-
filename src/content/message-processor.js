@@ -1,0 +1,189 @@
+import { HISTORY_TTL_MS, STABLE_CHECK_DELAY_MS, STABLE_CHECK_MAX_TRIES } from './constants.js';
+import { escapeRegExp, isRecentMessage } from '../lib/utils.js';
+
+export class MessageProcessor {
+    constructor(config, lockManager) {
+        this.config = config;
+        this.lockManager = lockManager;
+        this.processedSignatures = new Map();
+        this.pendingStabilityChecks = new WeakMap();
+    }
+
+    scheduleMessageProcessing(container) {
+        if (container.dataset.voxRead) return;
+        if (!this.lockManager.isPrimary()) return;
+
+        let state = this.pendingStabilityChecks.get(container);
+        if (!state) {
+            state = { tries: 0, lastKey: null, timerId: null, wasPrimary: false };
+            this.pendingStabilityChecks.set(container, state);
+        }
+        if (state.timerId) return;
+
+        state.wasPrimary = this.lockManager.isPrimary();
+        this.scheduleStabilityCheck(container, state);
+    }
+
+    scheduleStabilityCheck(container, state) {
+        state.timerId = setTimeout(() => {
+            state.timerId = null;
+
+            if (!container.isConnected || container.dataset.voxRead) {
+                this.pendingStabilityChecks.delete(container);
+                return;
+            }
+
+            const message = this.extractMessageData(container);
+            const ready = !!message && !!message.username && !!message.text &&
+                (!message.hasTime || message.timeStr);
+            const key = ready ? `${message.username}::${message.timeStr}::${message.text}` : null;
+
+            state.tries += 1;
+
+            if (ready && state.lastKey && state.lastKey === key) {
+                this.pendingStabilityChecks.delete(container);
+                this.processMessageContainer(container, state.wasPrimary);
+                return;
+            }
+
+            state.lastKey = key;
+
+            if (state.tries >= STABLE_CHECK_MAX_TRIES) {
+                this.pendingStabilityChecks.delete(container);
+                if (ready) this.processMessageContainer(container, state.wasPrimary);
+                return;
+            }
+
+            this.scheduleStabilityCheck(container, state);
+        }, STABLE_CHECK_DELAY_MS);
+    }
+
+    extractMessageData(container) {
+        const userEl = container.querySelector('.chat-line__username');
+        if (!userEl) return null;
+
+        const timeEl = container.querySelector('.chat-line__timestamp');
+        const timeStr = timeEl ? timeEl.innerText : "";
+
+        const rawUserName = userEl.innerText || "";
+        const username = rawUserName.replace(/\s*\(.*?\)$/, '').trim();
+
+        let rawText = "";
+        let bodyElement = container.querySelector('[data-test-selector="chat-line-message-body"], .chat-line__message-body');
+        if (bodyElement) {
+            rawText = bodyElement.innerText || "";
+        } else {
+            const clone = container.cloneNode(true);
+            const removeSelectors = [
+                '.chat-line__timestamp', '.chat-line__username', '.chat-line__username-container',
+                '.chat-badge', '[aria-hidden="true"]', '.mention-fragment',
+                '.chat-line__status', '.chat-line__message--system'
+            ];
+            removeSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
+            rawText = clone.innerText || "";
+        }
+        const text = rawText.trim();
+
+        return { username, timeStr, text, hasTime: !!timeEl };
+    }
+
+    processMessageContainer(container, allowStalePrimary = false) {
+        if (container.dataset.voxRead) return;
+        if (!this.lockManager.isPrimary() && !allowStalePrimary) return;
+
+        const now = Date.now();
+        this.pruneHistory(now);
+
+        const message = this.extractMessageData(container);
+        if (!message || !message.text || message.text.includes("新着メッセージ")) return;
+
+        const { username, timeStr, text } = message;
+
+        // Deduplication key
+        const safeTime = timeStr || "no-time";
+        const signature = `${username}::${safeTime}::${text}`;
+
+        if (this.processedSignatures.has(signature)) {
+            container.dataset.voxRead = "true";
+            return;
+        }
+
+        if (timeStr && !isRecentMessage(timeStr)) {
+            console.log(`Skipped message due to time check: "${text}" (Time: ${timeStr})`);
+            container.dataset.voxRead = "true";
+            this.addHistory(signature, now);
+            return;
+        }
+
+        if (this.config.blockList) {
+            const blocked = this.config.blockList.split(',').map(s => s.trim().toLowerCase());
+            if (blocked.includes(username.toLowerCase())) {
+                container.dataset.voxRead = "true";
+                return;
+            }
+        }
+
+        if (this.config.ignoreCommand && text.startsWith("!")) return;
+
+        // Execute
+        this.addHistory(signature, now);
+        container.dataset.voxRead = "true";
+        this.speak(text, username, signature);
+    }
+
+    speak(text, username, signature) {
+        let speakText = text.replace(/https?:\/\/[^\s]+/g, "URL");
+
+        // Dictionary replacement
+        if (this.config.dictionary && Array.isArray(this.config.dictionary)) {
+            this.config.dictionary.forEach(entry => {
+                if (entry.from && entry.to) {
+                    try {
+                        const regex = new RegExp(escapeRegExp(entry.from), 'gi');
+                        speakText = speakText.replace(regex, entry.to);
+                    } catch (e) {
+                        speakText = speakText.split(entry.from).join(entry.to);
+                    }
+                }
+            });
+        }
+
+        if (this.config.readName) {
+            speakText = username.replace(/[:：]$/, '') + "さん。" + speakText;
+        }
+        speakText = speakText.replace(/(.)\1{2,}/g, '$1');
+
+        if (speakText.length > this.config.maxLength) {
+            speakText = speakText.substring(0, this.config.maxLength) + "、以下省略";
+        }
+
+        try {
+            chrome.runtime.sendMessage({
+                type: "SPEAK_REQUEST",
+                payload: {
+                    text: speakText,
+                    speakerId: this.config.speakerId || 3,
+                    speed: this.config.speed || 1.0,
+                    volume: this.config.volume || 1.0,
+                    deviceId: this.config.audioDeviceId || "",
+                    uniqueId: signature
+                }
+            });
+        } catch (e) {
+            console.log("Error sending message:", e);
+            this.lockManager.cleanupIfInvalid();
+        }
+    }
+
+    addHistory(sig, now) {
+        this.processedSignatures.set(sig, now);
+    }
+
+    pruneHistory(now) {
+        for (const [sig, timestamp] of this.processedSignatures.entries()) {
+            if (now - timestamp > HISTORY_TTL_MS) {
+                this.processedSignatures.delete(sig);
+            }
+        }
+    }
+}
