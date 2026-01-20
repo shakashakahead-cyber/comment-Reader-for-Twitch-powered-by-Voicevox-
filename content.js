@@ -13,6 +13,11 @@ let config = {
   dictionary: [] // 辞書初期値
 };
 
+// Delay/stability check to avoid reading before chat line updates.
+const STABLE_CHECK_DELAY_MS = 80;
+const STABLE_CHECK_MAX_TRIES = 6;
+const pendingStabilityChecks = new WeakMap();
+
 // Active reader lock across dashboard tabs.
 const ACTIVE_READER_KEY = "voxActiveReader";
 const ACTIVE_READER_TTL_MS = 8000;
@@ -194,8 +199,85 @@ observer = new MutationObserver((mutations) => {
   }
 
   // 閾値以下なら処理実行
-  candidates.forEach(processMessageContainer);
+  candidates.forEach(scheduleMessageProcessing);
 });
+
+function extractMessageData(container) {
+  const userEl = container.querySelector('.chat-line__username');
+  if (!userEl) return null;
+
+  const timeEl = container.querySelector('.chat-line__timestamp');
+  const timeStr = timeEl ? timeEl.innerText : "";
+
+  const rawUserName = userEl.innerText || "";
+  const username = rawUserName.replace(/\s*\(.*?\)$/, '').trim();
+
+  let rawText = "";
+  let bodyElement = container.querySelector('[data-test-selector="chat-line-message-body"], .chat-line__message-body');
+  if (bodyElement) {
+    rawText = bodyElement.innerText || "";
+  } else {
+    const clone = container.cloneNode(true);
+    const removeSelectors = [
+      '.chat-line__timestamp', '.chat-line__username', '.chat-line__username-container',
+      '.chat-badge', '[aria-hidden="true"]', '.mention-fragment',
+      '.chat-line__status', '.chat-line__message--system'
+    ];
+    removeSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
+    rawText = clone.innerText || "";
+  }
+  const text = rawText.trim();
+
+  return { username, timeStr, text, hasTime: !!timeEl };
+}
+
+function scheduleMessageProcessing(container) {
+  if (container.dataset.voxRead) return;
+  if (!isPrimaryReader) return;
+
+  let state = pendingStabilityChecks.get(container);
+  if (!state) {
+    state = { tries: 0, lastKey: null, timerId: null };
+    pendingStabilityChecks.set(container, state);
+  }
+  if (state.timerId) return;
+
+  scheduleStabilityCheck(container, state);
+}
+
+function scheduleStabilityCheck(container, state) {
+  state.timerId = setTimeout(() => {
+    state.timerId = null;
+
+    if (!container.isConnected || container.dataset.voxRead || !isPrimaryReader) {
+      pendingStabilityChecks.delete(container);
+      return;
+    }
+
+    const message = extractMessageData(container);
+    const ready = !!message && !!message.username && !!message.text &&
+      (!message.hasTime || message.timeStr);
+    const key = ready ? `${message.username}::${message.timeStr}::${message.text}` : null;
+
+    state.tries += 1;
+
+    if (ready && state.lastKey && state.lastKey === key) {
+      pendingStabilityChecks.delete(container);
+      processMessageContainer(container);
+      return;
+    }
+
+    state.lastKey = key;
+
+    if (state.tries >= STABLE_CHECK_MAX_TRIES) {
+      pendingStabilityChecks.delete(container);
+      if (ready) processMessageContainer(container);
+      return;
+    }
+
+    scheduleStabilityCheck(container, state);
+  }, STABLE_CHECK_DELAY_MS);
+}
 
 function processMessageContainer(container) {
   if (container.dataset.voxRead) return;
