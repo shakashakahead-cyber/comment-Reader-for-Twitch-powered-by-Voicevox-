@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 権限ボタン
     document.getElementById('btnPermission').addEventListener('click', () => {
-        chrome.tabs.create({ url: 'src/popup/permission.html' }); // Root or src?
+        chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/permission.html') });
     });
 
     // ▼ 追加: 辞書ボタン
