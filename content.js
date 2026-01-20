@@ -237,11 +237,12 @@ function scheduleMessageProcessing(container) {
 
   let state = pendingStabilityChecks.get(container);
   if (!state) {
-    state = { tries: 0, lastKey: null, timerId: null };
+    state = { tries: 0, lastKey: null, timerId: null, wasPrimary: false };
     pendingStabilityChecks.set(container, state);
   }
   if (state.timerId) return;
 
+  state.wasPrimary = isPrimaryReader;
   scheduleStabilityCheck(container, state);
 }
 
@@ -249,7 +250,7 @@ function scheduleStabilityCheck(container, state) {
   state.timerId = setTimeout(() => {
     state.timerId = null;
 
-    if (!container.isConnected || container.dataset.voxRead || !isPrimaryReader) {
+    if (!container.isConnected || container.dataset.voxRead) {
       pendingStabilityChecks.delete(container);
       return;
     }
@@ -263,7 +264,7 @@ function scheduleStabilityCheck(container, state) {
 
     if (ready && state.lastKey && state.lastKey === key) {
       pendingStabilityChecks.delete(container);
-      processMessageContainer(container);
+      processMessageContainer(container, state.wasPrimary);
       return;
     }
 
@@ -271,7 +272,7 @@ function scheduleStabilityCheck(container, state) {
 
     if (state.tries >= STABLE_CHECK_MAX_TRIES) {
       pendingStabilityChecks.delete(container);
-      if (ready) processMessageContainer(container);
+      if (ready) processMessageContainer(container, state.wasPrimary);
       return;
     }
 
@@ -279,9 +280,9 @@ function scheduleStabilityCheck(container, state) {
   }, STABLE_CHECK_DELAY_MS);
 }
 
-function processMessageContainer(container) {
+function processMessageContainer(container, allowStalePrimary = false) {
   if (container.dataset.voxRead) return;
-  if (!isPrimaryReader) return;
+  if (!isPrimaryReader && !allowStalePrimary) return;
 
   const now = Date.now();
   pruneHistory(now);
