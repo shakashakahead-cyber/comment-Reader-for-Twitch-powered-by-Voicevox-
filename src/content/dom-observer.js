@@ -1,3 +1,5 @@
+import { MASS_REDRAW_PROCESS_LIMIT, MASS_REDRAW_THRESHOLD } from './constants.js';
+
 export class DomObserver {
     constructor(config, lockManager, messageProcessor) {
         this.config = config;
@@ -5,6 +7,11 @@ export class DomObserver {
         this.messageProcessor = messageProcessor;
         this.observer = null;
         this.scriptStartTime = Date.now();
+        this.containerSelectorQuery = [
+            '.chat-line__message',
+            'div[data-test-selector="chat-line-message"]',
+            '.chat-line__message-container'
+        ].join(', ');
     }
 
     start() {
@@ -15,52 +22,91 @@ export class DomObserver {
             // Startup buffer
             if (Date.now() - this.scriptStartTime < (this.config.skipTime * 1000)) return;
 
-            let addedMessageCount = 0;
-            let candidates = [];
+            const candidates = new Set();
 
             mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType !== 1) return;
+                if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach((node) => this.collectCandidatesFromAddedNode(node, candidates));
+                    return;
+                }
 
-                    const nodeText = String(node.innerText || "");
-                    if (node.classList.contains('chat-list__new-messages-indicator') ||
-                        nodeText.includes("新着メッセージ")) return;
-
-                    const containerSelectors = [
-                        '.chat-line__message',
-                        'div[data-test-selector="chat-line-message"]',
-                        '.chat-line__message-container'
-                    ];
-
-                    let found = [];
-                    if (containerSelectors.some(sel => node.matches && node.matches(sel))) found.push(node);
-                    for (const sel of containerSelectors) node.querySelectorAll(sel).forEach(el => found.push(el));
-
-                    found.forEach(el => {
-                        if (!candidates.includes(el)) {
-                            candidates.push(el);
-                            addedMessageCount++;
-                        }
-                    });
-                });
+                if (mutation.type === 'characterData') {
+                    this.collectCandidateFromChangedNode(mutation.target, candidates);
+                }
             });
 
-            // Mass redraw protection
-            if (addedMessageCount >= 50) {
-                console.log(`Mass redraw detected (${addedMessageCount} items). Skipping.`);
-                candidates.forEach(c => c.dataset.voxRead = "true");
+            const candidateList = Array.from(candidates).filter((container) => !container.dataset.voxRead);
+
+            // Mass redraw protection: keep newest subset instead of skipping all.
+            if (candidateList.length >= MASS_REDRAW_THRESHOLD) {
+                const reduced = candidateList.slice(-MASS_REDRAW_PROCESS_LIMIT);
+                console.log(
+                    `Mass redraw detected (${candidateList.length} items). Processing latest ${reduced.length}.`
+                );
+                reduced.forEach((container) => this.messageProcessor.scheduleMessageProcessing(container));
                 return;
             }
 
-            candidates.forEach(container => {
+            candidateList.forEach((container) => {
                 this.messageProcessor.scheduleMessageProcessing(container);
             });
         });
 
-        this.observer.observe(document.body, { childList: true, subtree: true });
+        this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+        // Ignore messages that already exist when script starts.
+        this.markCurrentMessagesAsRead();
     }
 
     stop() {
         if (this.observer) this.observer.disconnect();
+    }
+
+    markCurrentMessagesAsRead() {
+        const now = Date.now();
+        document.querySelectorAll(this.containerSelectorQuery).forEach((container) => {
+            if (typeof this.messageProcessor.rememberExistingContainer === "function") {
+                this.messageProcessor.rememberExistingContainer(container, now);
+                return;
+            }
+            container.dataset.voxRead = "true";
+        });
+    }
+
+    collectCandidatesFromAddedNode(node, candidates) {
+        if (!node) return;
+
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            this.collectCandidateFromChangedNode(node, candidates);
+            return;
+        }
+
+        const element = node;
+
+        if (element.classList?.contains('chat-list__new-messages-indicator')) {
+            return;
+        }
+
+        if (element.matches?.(this.containerSelectorQuery)) {
+            candidates.add(element);
+        }
+
+        element.querySelectorAll?.(this.containerSelectorQuery).forEach((container) => candidates.add(container));
+
+        const parentContainer = element.closest?.(this.containerSelectorQuery);
+        if (parentContainer) candidates.add(parentContainer);
+    }
+
+    collectCandidateFromChangedNode(node, candidates) {
+        if (!node) return;
+
+        const element = node.nodeType === Node.ELEMENT_NODE
+            ? node
+            : node.parentElement;
+
+        if (!element) return;
+
+        const container = element.closest?.(this.containerSelectorQuery);
+        if (container) candidates.add(container);
     }
 }

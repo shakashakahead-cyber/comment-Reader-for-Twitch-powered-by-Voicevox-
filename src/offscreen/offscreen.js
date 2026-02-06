@@ -2,23 +2,32 @@
 const VOICEVOX_URL = "http://127.0.0.1:50021";
 let audioQueue = [];
 let isPlaying = false;
+const UNIQUE_ID_DEDUP_TTL_MS = 30 * 1000;
+const uniqueIdsInQueue = new Set();
+const recentUniqueIds = new Map();
 
-// Record played IDs to prevent duplicate playback
-const playedIds = new Set();
+function pruneRecentUniqueIds(now) {
+    for (const [uniqueId, timestamp] of recentUniqueIds.entries()) {
+        if (now - timestamp > UNIQUE_ID_DEDUP_TTL_MS) {
+            recentUniqueIds.delete(uniqueId);
+        }
+    }
+}
 
 chrome.runtime.onMessage.addListener((request) => {
     if (request.type === "PLAY_AUDIO") {
         const payload = request.payload;
-
-        if (payload.uniqueId && playedIds.has(payload.uniqueId)) {
-            return;
-        }
+        if (!payload || typeof payload.text !== "string" || !payload.text.trim()) return;
 
         if (payload.uniqueId) {
-            playedIds.add(payload.uniqueId);
-            setTimeout(() => {
-                playedIds.delete(payload.uniqueId);
-            }, 5000);
+            const now = Date.now();
+            pruneRecentUniqueIds(now);
+            if (uniqueIdsInQueue.has(payload.uniqueId)) return;
+
+            const seenAt = recentUniqueIds.get(payload.uniqueId);
+            if (seenAt && (now - seenAt) < UNIQUE_ID_DEDUP_TTL_MS) return;
+
+            uniqueIdsInQueue.add(payload.uniqueId);
         }
 
         audioQueue.push(payload);
@@ -29,6 +38,8 @@ chrome.runtime.onMessage.addListener((request) => {
     if (request.type === "CLEAR_QUEUE") {
         audioQueue = []; // Empty the queue
         isPlaying = false;
+        uniqueIdsInQueue.clear();
+        recentUniqueIds.clear();
         // Simple way to stop current audio is to reload the page
         window.location.reload();
     }
@@ -46,6 +57,10 @@ async function processQueue() {
     } catch (err) {
         console.error("Playback Error:", err);
     } finally {
+        if (item.uniqueId) {
+            uniqueIdsInQueue.delete(item.uniqueId);
+            recentUniqueIds.set(item.uniqueId, Date.now());
+        }
         isPlaying = false;
         processQueue();
     }

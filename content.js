@@ -1,4 +1,6 @@
 // content.js
+// NOTE: Runtime content script is loaded from src/content/main.js via manifest.json.
+// This legacy file is kept for reference.
 
 
 // ■ 履歴管理（時間窓で重複判定）
@@ -12,6 +14,8 @@ let config = {
   blockList: "", audioDeviceId: "",
   dictionary: [] // 辞書初期値
 };
+let blockedUsersCacheKey = null;
+let blockedUsersCache = new Set();
 
 // Delay/stability check to avoid reading before chat line updates.
 const STABLE_CHECK_DELAY_MS = 80;
@@ -296,6 +300,7 @@ function processMessageContainer(container, allowStalePrimary = false) {
 
   const rawUserName = userEl.innerText || "";
   let username = rawUserName.replace(/\s*\(.*?\)$/, '').trim();
+  const normalizedUsername = normalizeDisplayName(username);
 
   // 本文抽出
   let rawText = "";
@@ -338,15 +343,20 @@ function processMessageContainer(container, allowStalePrimary = false) {
   }
 
   // 設定チェック
-  if (config.blockList) {
-    const blocked = config.blockList.split(',').map(s => s.trim().toLowerCase());
-    if (blocked.includes(username.toLowerCase())) {
+  if (config.blockList && normalizedUsername) {
+    const blockedUsers = getBlockedUsers();
+    if (blockedUsers.has(normalizedUsername)) {
       container.dataset.voxRead = "true";
+      addHistory(signature, now);
       return;
     }
   }
 
-  if (config.ignoreCommand && text.startsWith("!")) return;
+  if (config.ignoreCommand && text.startsWith("!")) {
+    container.dataset.voxRead = "true";
+    addHistory(signature, now);
+    return;
+  }
 
 
   // ■■■ 読み上げ実行 ■■■
@@ -414,6 +424,30 @@ function pruneHistory(now) {
 }
 
 // ★修正した時刻判定関数
+function normalizeDisplayName(name) {
+  const raw = String(name ?? "").trim();
+  const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
+  return normalized.toLowerCase();
+}
+
+function getBlockedUsers() {
+  const rawBlockList = String(config.blockList ?? "");
+  if (rawBlockList === blockedUsersCacheKey) {
+    return blockedUsersCache;
+  }
+
+  const nextBlockedUsers = new Set();
+  rawBlockList
+    .split(/[,\n]/)
+    .map(name => normalizeDisplayName(name))
+    .filter(Boolean)
+    .forEach(name => nextBlockedUsers.add(name));
+
+  blockedUsersCacheKey = rawBlockList;
+  blockedUsersCache = nextBlockedUsers;
+  return blockedUsersCache;
+}
+
 function isRecentMessage(timeStr) {
   // 時刻が取れない場合は、安全側に倒して「新しい」とみなす（MassGuardに任せる）
   if (!timeStr) return true;
