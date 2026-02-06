@@ -7,6 +7,32 @@ export class MessageProcessor {
         this.lockManager = lockManager;
         this.processedSignatures = new Map();
         this.pendingStabilityChecks = new WeakMap();
+        this.blockedUsersCacheKey = null;
+        this.blockedUsersCache = new Set();
+    }
+
+    normalizeDisplayName(name) {
+        const raw = String(name ?? "").trim();
+        const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
+        return normalized.toLowerCase();
+    }
+
+    getBlockedUsers() {
+        const rawBlockList = String(this.config.blockList ?? "");
+        if (rawBlockList === this.blockedUsersCacheKey) {
+            return this.blockedUsersCache;
+        }
+
+        const nextBlockedUsers = new Set();
+        rawBlockList
+            .split(/[,\n]/)
+            .map(name => this.normalizeDisplayName(name))
+            .filter(Boolean)
+            .forEach(name => nextBlockedUsers.add(name));
+
+        this.blockedUsersCacheKey = rawBlockList;
+        this.blockedUsersCache = nextBlockedUsers;
+        return this.blockedUsersCache;
     }
 
     scheduleMessageProcessing(container) {
@@ -98,6 +124,7 @@ export class MessageProcessor {
         if (!message || !message.text || message.text.includes("新着メッセージ")) return;
 
         const { username, timeStr, text } = message;
+        const normalizedUsername = this.normalizeDisplayName(username);
 
         // Deduplication key
         const safeTime = timeStr || "no-time";
@@ -115,15 +142,20 @@ export class MessageProcessor {
             return;
         }
 
-        if (this.config.blockList) {
-            const blocked = this.config.blockList.split(',').map(s => s.trim().toLowerCase());
-            if (blocked.includes(username.toLowerCase())) {
+        if (this.config.blockList && normalizedUsername) {
+            const blockedUsers = this.getBlockedUsers();
+            if (blockedUsers.has(normalizedUsername)) {
                 container.dataset.voxRead = "true";
+                this.addHistory(signature, now);
                 return;
             }
         }
 
-        if (this.config.ignoreCommand && text.startsWith("!")) return;
+        if (this.config.ignoreCommand && text.startsWith("!")) {
+            container.dataset.voxRead = "true";
+            this.addHistory(signature, now);
+            return;
+        }
 
         // Execute
         this.addHistory(signature, now);

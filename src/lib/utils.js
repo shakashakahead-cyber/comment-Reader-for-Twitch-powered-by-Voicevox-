@@ -30,6 +30,6 @@ export function isRecentMessage(timeStr) {
     if (diff < -1000) diff += 1440;
     if (diff > 1000) diff -= 1440;
 
-    // Allow: 1 min future ~ 3 min past
+    // Allow up to 10 minutes to absorb Twitch dashboard redraw and delay.
     return diff >= -10 && diff <= 10;
 }
