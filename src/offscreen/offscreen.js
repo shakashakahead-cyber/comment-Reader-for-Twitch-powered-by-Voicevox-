@@ -3,23 +3,10 @@ const VOICEVOX_URL = "http://127.0.0.1:50021";
 let audioQueue = [];
 let isPlaying = false;
 
-// Record played IDs to prevent duplicate playback
-const playedIds = new Set();
-
 chrome.runtime.onMessage.addListener((request) => {
     if (request.type === "PLAY_AUDIO") {
         const payload = request.payload;
-
-        if (payload.uniqueId && playedIds.has(payload.uniqueId)) {
-            return;
-        }
-
-        if (payload.uniqueId) {
-            playedIds.add(payload.uniqueId);
-            setTimeout(() => {
-                playedIds.delete(payload.uniqueId);
-            }, 5000);
-        }
+        if (!payload || typeof payload.text !== "string" || !payload.text.trim()) return;
 
         audioQueue.push(payload);
         processQueue();

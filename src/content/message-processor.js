@@ -1,4 +1,9 @@
-import { HISTORY_TTL_MS, STABLE_CHECK_DELAY_MS, STABLE_CHECK_MAX_TRIES } from './constants.js';
+import {
+    HISTORY_TTL_MS,
+    SIGNATURE_DEDUP_WINDOW_MS,
+    STABLE_CHECK_DELAY_MS,
+    STABLE_CHECK_MAX_TRIES
+} from './constants.js';
 import { escapeRegExp, isRecentMessage } from '../lib/utils.js';
 
 export class MessageProcessor {
@@ -60,9 +65,8 @@ export class MessageProcessor {
             }
 
             const message = this.extractMessageData(container);
-            const ready = !!message && !!message.username && !!message.text &&
-                (!message.hasTime || message.timeStr);
-            const key = ready ? `${message.username}::${message.timeStr}::${message.text}` : null;
+            const ready = !!message && !!message.username && !!message.text;
+            const key = ready ? `${message.username}::${message.timeStr || "no-time"}::${message.text}` : null;
 
             state.tries += 1;
 
@@ -90,6 +94,7 @@ export class MessageProcessor {
 
         const timeEl = container.querySelector('.chat-line__timestamp');
         const timeStr = timeEl ? timeEl.innerText : "";
+        const messageId = this.extractMessageId(container);
 
         const rawUserName = userEl.innerText || "";
         const username = rawUserName.replace(/\s*\(.*?\)$/, '').trim();
@@ -110,7 +115,16 @@ export class MessageProcessor {
         }
         const text = rawText.trim();
 
-        return { username, timeStr, text, hasTime: !!timeEl };
+        return { username, timeStr, text, hasTime: !!timeEl, messageId };
+    }
+
+    extractMessageId(container) {
+        return (
+            container.getAttribute('data-message-id') ||
+            container.getAttribute('id') ||
+            container.dataset.messageId ||
+            ""
+        ).trim();
     }
 
     processMessageContainer(container, allowStalePrimary = false) {
@@ -121,16 +135,19 @@ export class MessageProcessor {
         this.pruneHistory(now);
 
         const message = this.extractMessageData(container);
-        if (!message || !message.text || message.text.includes("新着メッセージ")) return;
+        if (!message || !message.text) return;
 
-        const { username, timeStr, text } = message;
+        const { username, timeStr, text, messageId } = message;
         const normalizedUsername = this.normalizeDisplayName(username);
 
         // Deduplication key
         const safeTime = timeStr || "no-time";
-        const signature = `${username}::${safeTime}::${text}`;
+        const signature = messageId
+            ? `id::${messageId}`
+            : `${username}::${safeTime}::${text}`;
+        const lastSeenAt = this.processedSignatures.get(signature);
 
-        if (this.processedSignatures.has(signature)) {
+        if (lastSeenAt && (now - lastSeenAt) < SIGNATURE_DEDUP_WINDOW_MS) {
             container.dataset.voxRead = "true";
             return;
         }

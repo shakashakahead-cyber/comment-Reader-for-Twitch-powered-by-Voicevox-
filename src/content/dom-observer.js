@@ -1,3 +1,5 @@
+import { MASS_REDRAW_PROCESS_LIMIT, MASS_REDRAW_THRESHOLD } from './constants.js';
+
 export class DomObserver {
     constructor(config, lockManager, messageProcessor) {
         this.config = config;
@@ -5,6 +7,11 @@ export class DomObserver {
         this.messageProcessor = messageProcessor;
         this.observer = null;
         this.scriptStartTime = Date.now();
+        this.containerSelectorQuery = [
+            '.chat-line__message',
+            'div[data-test-selector="chat-line-message"]',
+            '.chat-line__message-container'
+        ].join(', ');
     }
 
     start() {
@@ -15,52 +22,61 @@ export class DomObserver {
             // Startup buffer
             if (Date.now() - this.scriptStartTime < (this.config.skipTime * 1000)) return;
 
-            let addedMessageCount = 0;
-            let candidates = [];
+            const candidates = new Set();
 
             mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => {
-                    if (node.nodeType !== 1) return;
-
-                    const nodeText = String(node.innerText || "");
-                    if (node.classList.contains('chat-list__new-messages-indicator') ||
-                        nodeText.includes("新着メッセージ")) return;
-
-                    const containerSelectors = [
-                        '.chat-line__message',
-                        'div[data-test-selector="chat-line-message"]',
-                        '.chat-line__message-container'
-                    ];
-
-                    let found = [];
-                    if (containerSelectors.some(sel => node.matches && node.matches(sel))) found.push(node);
-                    for (const sel of containerSelectors) node.querySelectorAll(sel).forEach(el => found.push(el));
-
-                    found.forEach(el => {
-                        if (!candidates.includes(el)) {
-                            candidates.push(el);
-                            addedMessageCount++;
-                        }
-                    });
-                });
+                mutation.addedNodes.forEach((node) => this.collectCandidates(node, candidates));
+                this.collectCandidates(mutation.target, candidates);
             });
 
-            // Mass redraw protection
-            if (addedMessageCount >= 50) {
-                console.log(`Mass redraw detected (${addedMessageCount} items). Skipping.`);
-                candidates.forEach(c => c.dataset.voxRead = "true");
+            const candidateList = Array.from(candidates);
+
+            // Mass redraw protection: keep newest subset instead of skipping all.
+            if (candidateList.length >= MASS_REDRAW_THRESHOLD) {
+                const reduced = candidateList.slice(-MASS_REDRAW_PROCESS_LIMIT);
+                console.log(
+                    `Mass redraw detected (${candidateList.length} items). Processing latest ${reduced.length}.`
+                );
+                reduced.forEach((container) => this.messageProcessor.scheduleMessageProcessing(container));
                 return;
             }
 
-            candidates.forEach(container => {
+            candidateList.forEach((container) => {
                 this.messageProcessor.scheduleMessageProcessing(container);
             });
         });
 
-        this.observer.observe(document.body, { childList: true, subtree: true });
+        this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     }
 
     stop() {
         if (this.observer) this.observer.disconnect();
+    }
+
+    collectCandidates(node, candidates) {
+        if (!node) return;
+
+        const element = node.nodeType === Node.ELEMENT_NODE
+            ? node
+            : (node.parentElement || null);
+
+        if (!element) return;
+
+        if (element.classList.contains('chat-list__new-messages-indicator')) {
+            return;
+        }
+
+        if (element.matches && element.matches(this.containerSelectorQuery)) {
+            candidates.add(element);
+        }
+
+        if (element.closest) {
+            const parentContainer = element.closest(this.containerSelectorQuery);
+            if (parentContainer) candidates.add(parentContainer);
+        }
+
+        if (element.querySelectorAll) {
+            element.querySelectorAll(this.containerSelectorQuery).forEach((container) => candidates.add(container));
+        }
     }
 }
