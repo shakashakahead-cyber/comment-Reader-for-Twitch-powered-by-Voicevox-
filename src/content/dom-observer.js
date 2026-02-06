@@ -15,6 +15,9 @@ export class DomObserver {
     }
 
     start() {
+        // Ignore messages that already exist when script starts.
+        this.markCurrentMessagesAsRead();
+
         this.observer = new MutationObserver((mutations) => {
             if (!this.config.enabled) return;
             if (!this.lockManager.isPrimary()) return;
@@ -25,11 +28,17 @@ export class DomObserver {
             const candidates = new Set();
 
             mutations.forEach((mutation) => {
-                mutation.addedNodes.forEach((node) => this.collectCandidates(node, candidates));
-                this.collectCandidates(mutation.target, candidates);
+                if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach((node) => this.collectCandidatesFromAddedNode(node, candidates));
+                    return;
+                }
+
+                if (mutation.type === 'characterData') {
+                    this.collectCandidateFromChangedNode(mutation.target, candidates);
+                }
             });
 
-            const candidateList = Array.from(candidates);
+            const candidateList = Array.from(candidates).filter((container) => !container.dataset.voxRead);
 
             // Mass redraw protection: keep newest subset instead of skipping all.
             if (candidateList.length >= MASS_REDRAW_THRESHOLD) {
@@ -53,30 +62,51 @@ export class DomObserver {
         if (this.observer) this.observer.disconnect();
     }
 
-    collectCandidates(node, candidates) {
+    markCurrentMessagesAsRead() {
+        const now = Date.now();
+        document.querySelectorAll(this.containerSelectorQuery).forEach((container) => {
+            if (typeof this.messageProcessor.rememberExistingContainer === "function") {
+                this.messageProcessor.rememberExistingContainer(container, now);
+                return;
+            }
+            container.dataset.voxRead = "true";
+        });
+    }
+
+    collectCandidatesFromAddedNode(node, candidates) {
+        if (!node) return;
+
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            this.collectCandidateFromChangedNode(node, candidates);
+            return;
+        }
+
+        const element = node;
+
+        if (element.classList?.contains('chat-list__new-messages-indicator')) {
+            return;
+        }
+
+        if (element.matches?.(this.containerSelectorQuery)) {
+            candidates.add(element);
+        }
+
+        element.querySelectorAll?.(this.containerSelectorQuery).forEach((container) => candidates.add(container));
+
+        const parentContainer = element.closest?.(this.containerSelectorQuery);
+        if (parentContainer) candidates.add(parentContainer);
+    }
+
+    collectCandidateFromChangedNode(node, candidates) {
         if (!node) return;
 
         const element = node.nodeType === Node.ELEMENT_NODE
             ? node
-            : (node.parentElement || null);
+            : node.parentElement;
 
         if (!element) return;
 
-        if (element.classList.contains('chat-list__new-messages-indicator')) {
-            return;
-        }
-
-        if (element.matches && element.matches(this.containerSelectorQuery)) {
-            candidates.add(element);
-        }
-
-        if (element.closest) {
-            const parentContainer = element.closest(this.containerSelectorQuery);
-            if (parentContainer) candidates.add(parentContainer);
-        }
-
-        if (element.querySelectorAll) {
-            element.querySelectorAll(this.containerSelectorQuery).forEach((container) => candidates.add(container));
-        }
+        const container = element.closest?.(this.containerSelectorQuery);
+        if (container) candidates.add(container);
     }
 }

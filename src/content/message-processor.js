@@ -65,7 +65,8 @@ export class MessageProcessor {
             }
 
             const message = this.extractMessageData(container);
-            const ready = !!message && !!message.username && !!message.text;
+            const ready = !!message && !!message.username && !!message.text &&
+                (!message.hasTime || !!message.timeStr);
             const key = ready ? `${message.username}::${message.timeStr || "no-time"}::${message.text}` : null;
 
             state.tries += 1;
@@ -127,6 +128,24 @@ export class MessageProcessor {
         ).trim();
     }
 
+    buildSignature(message) {
+        const { username, timeStr, text, messageId } = message;
+        if (messageId) return `id::${messageId}`;
+        return `${username}::${timeStr || "no-time"}::${text}`;
+    }
+
+    rememberExistingContainer(container, now = Date.now()) {
+        const message = this.extractMessageData(container);
+        if (!message || !message.text) {
+            container.dataset.voxRead = "true";
+            return;
+        }
+
+        const signature = this.buildSignature(message);
+        this.addHistory(signature, now);
+        container.dataset.voxRead = "true";
+    }
+
     processMessageContainer(container, allowStalePrimary = false) {
         if (container.dataset.voxRead) return;
         if (!this.lockManager.isPrimary() && !allowStalePrimary) return;
@@ -141,15 +160,21 @@ export class MessageProcessor {
         const normalizedUsername = this.normalizeDisplayName(username);
 
         // Deduplication key
-        const safeTime = timeStr || "no-time";
-        const signature = messageId
-            ? `id::${messageId}`
-            : `${username}::${safeTime}::${text}`;
+        const signature = this.buildSignature(message);
         const lastSeenAt = this.processedSignatures.get(signature);
 
-        if (lastSeenAt && (now - lastSeenAt) < SIGNATURE_DEDUP_WINDOW_MS) {
-            container.dataset.voxRead = "true";
-            return;
+        if (lastSeenAt) {
+            // Message IDs should never be replayed within history TTL.
+            if (messageId) {
+                container.dataset.voxRead = "true";
+                return;
+            }
+
+            // Fallback signature (name+time+text) has a shorter dedup window.
+            if ((now - lastSeenAt) < SIGNATURE_DEDUP_WINDOW_MS) {
+                container.dataset.voxRead = "true";
+                return;
+            }
         }
 
         if (timeStr && !isRecentMessage(timeStr)) {

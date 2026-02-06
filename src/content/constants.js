@@ -1,7 +1,7 @@
 export const HISTORY_TTL_MS = 3 * 60 * 1000;
 export const STABLE_CHECK_DELAY_MS = 100;
 export const STABLE_CHECK_MAX_TRIES = 12;
-export const SIGNATURE_DEDUP_WINDOW_MS = 3 * 1000;
+export const SIGNATURE_DEDUP_WINDOW_MS = 90 * 1000;
 export const MASS_REDRAW_THRESHOLD = 50;
 export const MASS_REDRAW_PROCESS_LIMIT = 20;
 export const ACTIVE_READER_KEY = "voxActiveReader";
