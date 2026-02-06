@@ -15,9 +15,6 @@ export class DomObserver {
     }
 
     start() {
-        // Ignore messages that already exist when script starts.
-        this.markCurrentMessagesAsRead();
-
         this.observer = new MutationObserver((mutations) => {
             if (!this.config.enabled) return;
             if (!this.lockManager.isPrimary()) return;
@@ -56,6 +53,9 @@ export class DomObserver {
         });
 
         this.observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+        // Ignore messages that already exist when script starts.
+        this.markCurrentMessagesAsRead();
     }
 
     stop() {
