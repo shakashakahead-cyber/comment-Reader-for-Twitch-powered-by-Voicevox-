@@ -308,7 +308,7 @@ export class MessageProcessor {
             prefixes.push(this.buildDisplayNameForSpeech(username));
         }
 
-        if (this.config.readName && isReply && replyTargetUsername) {
+        if (isReply && replyTargetUsername) {
             prefixes.push(this.buildDisplayNameForSpeech(replyTargetUsername));
         }
 
