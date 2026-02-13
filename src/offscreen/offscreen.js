@@ -1,10 +1,78 @@
 // offscreen.js
-const VOICEVOX_URL = "http://127.0.0.1:50021";
+const VOICEVOX_BASE_URLS = [
+    "http://127.0.0.1:50021",
+    "http://localhost:50021"
+];
+let preferredVoicevoxBaseUrl = VOICEVOX_BASE_URLS[0];
 let audioQueue = [];
 let isPlaying = false;
 const UNIQUE_ID_DEDUP_TTL_MS = 30 * 1000;
 const uniqueIdsInQueue = new Set();
 const recentUniqueIds = new Map();
+const failedSinkIds = new Set();
+let hasLoggedSinkIdUnsupported = false;
+
+function getVoicevoxBaseCandidates() {
+    const ordered = [];
+    [preferredVoicevoxBaseUrl, ...VOICEVOX_BASE_URLS].forEach((baseUrl) => {
+        if (!baseUrl || ordered.includes(baseUrl)) return;
+        ordered.push(baseUrl);
+    });
+    return ordered;
+}
+
+function sanitizeErrorText(text) {
+    return String(text ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 160);
+}
+
+function describeError(error) {
+    if (!error) return "Unknown error";
+    const name = typeof error.name === "string" && error.name ? error.name : "Error";
+    const message = typeof error.message === "string" && error.message ? error.message : "";
+    return message ? `${name}: ${message}` : name;
+}
+
+function normalizeDeviceId(deviceId) {
+    return String(deviceId ?? "").trim();
+}
+
+function shortDeviceId(deviceId) {
+    if (!deviceId) return "<default>";
+    if (deviceId.length <= 12) return deviceId;
+    return `${deviceId.slice(0, 6)}...${deviceId.slice(-4)}`;
+}
+
+async function fetchVoicevox(path, init = {}) {
+    const candidates = getVoicevoxBaseCandidates();
+    const errors = [];
+
+    for (const baseUrl of candidates) {
+        const requestUrl = `${baseUrl}${path}`;
+
+        try {
+            const response = await fetch(requestUrl, init);
+            if (!response.ok) {
+                const errorBody = sanitizeErrorText(await response.text().catch(() => ""));
+                throw new Error(
+                    `HTTP ${response.status}${errorBody ? `: ${errorBody}` : ""}`
+                );
+            }
+
+            preferredVoicevoxBaseUrl = baseUrl;
+            return response;
+        } catch (err) {
+            const reason = err && err.message ? err.message : String(err);
+            errors.push(`${baseUrl}: ${reason}`);
+        }
+    }
+
+    throw new Error(
+        `VOICEVOX fetch failed (${path}). Tried: ${candidates.join(", ")}. ${errors.join(" | ")}`
+    );
+}
 
 function pruneRecentUniqueIds(now) {
     for (const [uniqueId, timestamp] of recentUniqueIds.entries()) {
@@ -67,16 +135,15 @@ async function processQueue() {
 }
 
 async function generateAudio(text, speakerId, speed) {
-    const queryUrl = `${VOICEVOX_URL}/audio_query?speaker=${speakerId}&text=${encodeURIComponent(text)}`;
-    const queryRes = await fetch(queryUrl, { method: "POST" });
-
-    if (!queryRes.ok) throw new Error("Voicevox API Error");
+    const safeSpeakerId = Number.isFinite(Number(speakerId)) ? Number(speakerId) : 3;
+    const queryPath = `/audio_query?speaker=${encodeURIComponent(safeSpeakerId)}&text=${encodeURIComponent(text)}`;
+    const queryRes = await fetchVoicevox(queryPath, { method: "POST" });
 
     const queryJson = await queryRes.json();
     queryJson.speedScale = Number(speed) || 1.0;
     queryJson.volumeScale = 1.0;
 
-    const synthRes = await fetch(`${VOICEVOX_URL}/synthesis?speaker=${speakerId}`, {
+    const synthRes = await fetchVoicevox(`/synthesis?speaker=${encodeURIComponent(safeSpeakerId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(queryJson)
@@ -92,12 +159,33 @@ async function playAudio(blob, volume, deviceId) {
 
         audio.volume = volume;
 
-        if (deviceId && typeof audio.setSinkId === 'function') {
-            try {
-                await audio.setSinkId(deviceId);
-            } catch (e) {
-                console.warn("Failed to set audio device:", e);
+        const normalizedDeviceId = normalizeDeviceId(deviceId);
+
+        if (normalizedDeviceId && typeof audio.setSinkId === 'function') {
+            if (!failedSinkIds.has(normalizedDeviceId)) {
+                try {
+                    await audio.setSinkId(normalizedDeviceId);
+                } catch (e) {
+                    failedSinkIds.add(normalizedDeviceId);
+                    console.warn(
+                        `[AudioOutput] Failed to set sinkId "${shortDeviceId(normalizedDeviceId)}". ` +
+                        `Falling back to default output. ${describeError(e)}`
+                    );
+
+                    try {
+                        await audio.setSinkId("default");
+                    } catch (fallbackErr) {
+                        console.warn(
+                            `[AudioOutput] Failed to switch to default sink. ${describeError(fallbackErr)}`
+                        );
+                    }
+                }
             }
+        } else if (normalizedDeviceId && typeof audio.setSinkId !== 'function' && !hasLoggedSinkIdUnsupported) {
+            hasLoggedSinkIdUnsupported = true;
+            console.warn(
+                "[AudioOutput] setSinkId is not supported in this context. Using default output device."
+            );
         }
 
         audio.onended = () => {
