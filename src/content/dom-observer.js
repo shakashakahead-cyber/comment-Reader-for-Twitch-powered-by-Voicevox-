@@ -1,4 +1,4 @@
-import { MASS_REDRAW_PROCESS_LIMIT, MASS_REDRAW_THRESHOLD } from './constants.js';
+import { MASS_REDRAW_THRESHOLD } from './constants.js';
 
 export class DomObserver {
     constructor(config, lockManager, messageProcessor) {
@@ -7,6 +7,10 @@ export class DomObserver {
         this.messageProcessor = messageProcessor;
         this.observer = null;
         this.scriptStartTime = Date.now();
+        this.lastLocationHref = window.location.href;
+        this.rebaselineTimerId = null;
+        this.visibilityChangeHandler = null;
+        this.pageShowHandler = null;
         this.containerSelectorQuery = [
             '.chat-line__message',
             'div[data-test-selector="chat-line-message"]',
@@ -15,9 +19,29 @@ export class DomObserver {
     }
 
     start() {
+        this.lastLocationHref = window.location.href;
+
+        this.visibilityChangeHandler = () => {
+            if (document.visibilityState === 'visible') {
+                this.rebaselineCurrentMessages('visibility-change');
+            }
+        };
+        this.pageShowHandler = () => {
+            this.rebaselineCurrentMessages('pageshow');
+        };
+
+        document.addEventListener('visibilitychange', this.visibilityChangeHandler, true);
+        window.addEventListener('pageshow', this.pageShowHandler, true);
+
         this.observer = new MutationObserver((mutations) => {
             if (!this.config.enabled) return;
             if (!this.lockManager.isPrimary()) return;
+
+            if (window.location.href !== this.lastLocationHref) {
+                this.lastLocationHref = window.location.href;
+                this.rebaselineCurrentMessages('location-change');
+                return;
+            }
 
             // Startup buffer
             if (Date.now() - this.scriptStartTime < (this.config.skipTime * 1000)) return;
@@ -37,13 +61,12 @@ export class DomObserver {
 
             const candidateList = Array.from(candidates).filter((container) => !container.dataset.voxRead);
 
-            // Mass redraw protection: keep newest subset instead of skipping all.
+            // Mass redraw usually means view remount/navigation. Treat as existing backlog.
             if (candidateList.length >= MASS_REDRAW_THRESHOLD) {
-                const reduced = candidateList.slice(-MASS_REDRAW_PROCESS_LIMIT);
                 console.log(
-                    `Mass redraw detected (${candidateList.length} items). Processing latest ${reduced.length}.`
+                    `Mass redraw detected (${candidateList.length} items). Rebaselining existing messages.`
                 );
-                reduced.forEach((container) => this.messageProcessor.scheduleMessageProcessing(container));
+                this.rebaselineCurrentMessages('mass-redraw');
                 return;
             }
 
@@ -60,6 +83,18 @@ export class DomObserver {
 
     stop() {
         if (this.observer) this.observer.disconnect();
+        if (this.rebaselineTimerId) {
+            clearTimeout(this.rebaselineTimerId);
+            this.rebaselineTimerId = null;
+        }
+        if (this.visibilityChangeHandler) {
+            document.removeEventListener('visibilitychange', this.visibilityChangeHandler, true);
+            this.visibilityChangeHandler = null;
+        }
+        if (this.pageShowHandler) {
+            window.removeEventListener('pageshow', this.pageShowHandler, true);
+            this.pageShowHandler = null;
+        }
     }
 
     markCurrentMessagesAsRead() {
@@ -71,6 +106,23 @@ export class DomObserver {
             }
             container.dataset.voxRead = "true";
         });
+    }
+
+    rebaselineCurrentMessages(reason = 'unknown') {
+        this.scriptStartTime = Date.now();
+        this.markCurrentMessagesAsRead();
+
+        if (this.rebaselineTimerId) {
+            clearTimeout(this.rebaselineTimerId);
+        }
+
+        const delay = Math.max(300, this.config.skipTime * 1000);
+        this.rebaselineTimerId = setTimeout(() => {
+            this.markCurrentMessagesAsRead();
+            this.rebaselineTimerId = null;
+        }, delay);
+
+        console.log(`[TwitchReader] Rebased current messages (${reason}).`);
     }
 
     collectCandidatesFromAddedNode(node, candidates) {

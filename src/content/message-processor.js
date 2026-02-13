@@ -6,6 +6,32 @@ import {
 } from './constants.js';
 import { escapeRegExp, isRecentMessage } from '../lib/utils.js';
 
+const MESSAGE_BODY_SELECTOR = '[data-test-selector="chat-line-message-body"], .chat-line__message-body';
+
+const BASE_REMOVE_SELECTORS = [
+    '.chat-line__timestamp',
+    '.chat-line__username',
+    '.chat-line__username-container',
+    '.chat-badge',
+    '[aria-hidden="true"]',
+    '.mention-fragment',
+    '.chat-line__status',
+    '.chat-line__message--system'
+];
+
+const REPLY_CONTEXT_SELECTORS = [
+    '[data-test-selector*="reply"]',
+    '[data-a-target*="reply"]',
+    '.reply-line--mentioned-comment-author',
+    '.reply-line--mentioned-comment-text'
+];
+
+const REPLY_TARGET_AUTHOR_SELECTORS = [
+    '.reply-line--mentioned-comment-author',
+    '[data-test-selector*="reply-author"]',
+    '[data-a-target*="reply-author"]'
+];
+
 export class MessageProcessor {
     constructor(config, lockManager) {
         this.config = config;
@@ -40,6 +66,108 @@ export class MessageProcessor {
         return this.blockedUsersCache;
     }
 
+    hasReplyContext(element) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+
+        return REPLY_CONTEXT_SELECTORS.some(selector =>
+            (typeof element.matches === "function" && element.matches(selector)) ||
+            !!element.querySelector(selector)
+        );
+    }
+
+    sanitizeReplyTargetUsername(name) {
+        let sanitized = String(name ?? "").trim();
+        if (!sanitized) return "";
+
+        sanitized = sanitized.replace(/^[@＠]+/, "");
+        sanitized = sanitized.replace(/[,:：、。.!?！？]+$/g, "");
+        return sanitized.trim();
+    }
+
+    extractReplyTargetFromElement(element) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) return "";
+
+        for (const selector of REPLY_TARGET_AUTHOR_SELECTORS) {
+            const candidate = (typeof element.matches === "function" && element.matches(selector))
+                ? element
+                : element.querySelector(selector);
+
+            if (!candidate) continue;
+
+            const candidateText = this.sanitizeReplyTargetUsername(candidate.textContent || "");
+            if (candidateText) return candidateText;
+        }
+
+        return "";
+    }
+
+    extractLeadingMention(text) {
+        const mentionMatch = String(text ?? "").match(/^[@＠]([^\s@＠]+)\s*/);
+        if (!mentionMatch) return null;
+
+        return {
+            raw: mentionMatch[0],
+            username: this.sanitizeReplyTargetUsername(mentionMatch[1])
+        };
+    }
+
+    stripLeadingMentionsForTarget(text, targetUsername) {
+        const normalizedTarget = this.normalizeDisplayName(targetUsername);
+        if (!normalizedTarget) return String(text ?? "").trim();
+
+        let remaining = String(text ?? "");
+        while (remaining) {
+            const mention = this.extractLeadingMention(remaining);
+            if (!mention || !mention.username) break;
+
+            const normalizedMention = this.normalizeDisplayName(mention.username);
+            if (normalizedMention !== normalizedTarget) break;
+
+            remaining = remaining.slice(mention.raw.length);
+        }
+
+        return remaining.trim();
+    }
+
+    extractMessageTextAndReplyMeta(container) {
+        const bodyElement = container.querySelector(MESSAGE_BODY_SELECTOR);
+        const sourceElement = bodyElement || container;
+        const clone = sourceElement.cloneNode(true);
+
+        let replyTargetUsername = this.extractReplyTargetFromElement(sourceElement);
+        if (!replyTargetUsername) {
+            replyTargetUsername = this.extractReplyTargetFromElement(container);
+        }
+
+        const isReply = this.hasReplyContext(sourceElement) || this.hasReplyContext(container);
+
+        const removeSelectors = [...BASE_REMOVE_SELECTORS, ...REPLY_CONTEXT_SELECTORS];
+        removeSelectors.forEach(selector => {
+            clone.querySelectorAll(selector).forEach(element => element.remove());
+        });
+
+        const rawText = String(clone.innerText || "").trim();
+        let text = rawText;
+
+        if (isReply) {
+            const leadingMention = this.extractLeadingMention(text);
+            if (!replyTargetUsername && leadingMention?.username) {
+                replyTargetUsername = leadingMention.username;
+            }
+
+            if (replyTargetUsername) {
+                text = this.stripLeadingMentionsForTarget(text, replyTargetUsername);
+            }
+        }
+
+        return {
+            text: text.trim(),
+            rawText,
+            isReply,
+            replyTargetUsername
+        };
+    }
+
     scheduleMessageProcessing(container) {
         if (container.dataset.voxRead) return;
         if (!this.lockManager.isPrimary()) return;
@@ -65,9 +193,11 @@ export class MessageProcessor {
             }
 
             const message = this.extractMessageData(container);
-            const ready = !!message && !!message.username && !!message.text &&
+            const ready = !!message && !!message.username && !!message.rawText &&
                 (!message.hasTime || !!message.timeStr);
-            const key = ready ? `${message.username}::${message.timeStr || "no-time"}::${message.text}` : null;
+            const key = ready
+                ? `${message.username}::${message.timeStr || "no-time"}::${message.isReply ? "reply" : "normal"}::${message.replyTargetUsername || "no-reply-target"}::${message.rawText}`
+                : null;
 
             state.tries += 1;
 
@@ -100,23 +230,23 @@ export class MessageProcessor {
         const rawUserName = userEl.innerText || "";
         const username = rawUserName.replace(/\s*\(.*?\)$/, '').trim();
 
-        let rawText = "";
-        let bodyElement = container.querySelector('[data-test-selector="chat-line-message-body"], .chat-line__message-body');
-        if (bodyElement) {
-            rawText = bodyElement.innerText || "";
-        } else {
-            const clone = container.cloneNode(true);
-            const removeSelectors = [
-                '.chat-line__timestamp', '.chat-line__username', '.chat-line__username-container',
-                '.chat-badge', '[aria-hidden="true"]', '.mention-fragment',
-                '.chat-line__status', '.chat-line__message--system'
-            ];
-            removeSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
-            rawText = clone.innerText || "";
-        }
-        const text = rawText.trim();
+        const {
+            text,
+            rawText,
+            isReply,
+            replyTargetUsername
+        } = this.extractMessageTextAndReplyMeta(container);
 
-        return { username, timeStr, text, hasTime: !!timeEl, messageId };
+        return {
+            username,
+            timeStr,
+            text,
+            rawText,
+            hasTime: !!timeEl,
+            messageId,
+            isReply,
+            replyTargetUsername
+        };
     }
 
     extractMessageId(container) {
@@ -129,14 +259,14 @@ export class MessageProcessor {
     }
 
     buildSignature(message) {
-        const { username, timeStr, text, messageId } = message;
+        const { username, timeStr, text, messageId, replyTargetUsername } = message;
         if (messageId) return `id::${messageId}`;
-        return `${username}::${timeStr || "no-time"}::${text}`;
+        return `${username}::${timeStr || "no-time"}::${replyTargetUsername || "no-reply-target"}::${text}`;
     }
 
     rememberExistingContainer(container, now = Date.now()) {
         const message = this.extractMessageData(container);
-        if (!message || !message.text) {
+        if (!message || !message.rawText) {
             container.dataset.voxRead = "true";
             return;
         }
@@ -144,6 +274,45 @@ export class MessageProcessor {
         const signature = this.buildSignature(message);
         this.addHistory(signature, now);
         container.dataset.voxRead = "true";
+    }
+
+    buildDisplayNameForSpeech(name) {
+        const safeName = String(name ?? "").trim().replace(/[:：]$/, "");
+        if (!safeName) return "";
+        return `${safeName}さん。`;
+    }
+
+    buildSpeakBody(text) {
+        let speakBody = String(text ?? "").replace(/https?:\/\/[^\s]+/g, "URL");
+
+        if (this.config.dictionary && Array.isArray(this.config.dictionary)) {
+            this.config.dictionary.forEach(entry => {
+                if (!entry.from || !entry.to) return;
+
+                try {
+                    const regex = new RegExp(escapeRegExp(entry.from), 'gi');
+                    speakBody = speakBody.replace(regex, entry.to);
+                } catch (e) {
+                    speakBody = speakBody.split(entry.from).join(entry.to);
+                }
+            });
+        }
+
+        return speakBody;
+    }
+
+    buildSpeakText(text, username, isReply, replyTargetUsername) {
+        const prefixes = [];
+
+        if (this.config.readName) {
+            prefixes.push(this.buildDisplayNameForSpeech(username));
+        }
+
+        if (isReply && replyTargetUsername) {
+            prefixes.push(this.buildDisplayNameForSpeech(replyTargetUsername));
+        }
+
+        return `${prefixes.join("")}${this.buildSpeakBody(text)}`;
     }
 
     processMessageContainer(container, allowStalePrimary = false) {
@@ -154,23 +323,20 @@ export class MessageProcessor {
         this.pruneHistory(now);
 
         const message = this.extractMessageData(container);
-        if (!message || !message.text) return;
+        if (!message || !message.rawText) return;
 
-        const { username, timeStr, text, messageId } = message;
+        const { username, timeStr, text, messageId, isReply, replyTargetUsername } = message;
         const normalizedUsername = this.normalizeDisplayName(username);
 
-        // Deduplication key
         const signature = this.buildSignature(message);
         const lastSeenAt = this.processedSignatures.get(signature);
 
         if (lastSeenAt) {
-            // Message IDs should never be replayed within history TTL.
             if (messageId) {
                 container.dataset.voxRead = "true";
                 return;
             }
 
-            // Fallback signature (name+time+text) has a shorter dedup window.
             if ((now - lastSeenAt) < SIGNATURE_DEDUP_WINDOW_MS) {
                 container.dataset.voxRead = "true";
                 return;
@@ -199,32 +365,20 @@ export class MessageProcessor {
             return;
         }
 
-        // Execute
+        if (!text) {
+            container.dataset.voxRead = "true";
+            this.addHistory(signature, now);
+            return;
+        }
+
         this.addHistory(signature, now);
         container.dataset.voxRead = "true";
-        this.speak(text, username, signature);
+        this.speak(text, username, signature, { isReply, replyTargetUsername });
     }
 
-    speak(text, username, signature) {
-        let speakText = text.replace(/https?:\/\/[^\s]+/g, "URL");
-
-        // Dictionary replacement
-        if (this.config.dictionary && Array.isArray(this.config.dictionary)) {
-            this.config.dictionary.forEach(entry => {
-                if (entry.from && entry.to) {
-                    try {
-                        const regex = new RegExp(escapeRegExp(entry.from), 'gi');
-                        speakText = speakText.replace(regex, entry.to);
-                    } catch (e) {
-                        speakText = speakText.split(entry.from).join(entry.to);
-                    }
-                }
-            });
-        }
-
-        if (this.config.readName) {
-            speakText = username.replace(/[:：]$/, '') + "さん。" + speakText;
-        }
+    speak(text, username, signature, options = {}) {
+        const { isReply = false, replyTargetUsername = "" } = options;
+        let speakText = this.buildSpeakText(text, username, isReply, replyTargetUsername);
         speakText = speakText.replace(/(.)\1{2,}/g, '$1');
 
         if (speakText.length > this.config.maxLength) {

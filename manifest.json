@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Comment Reader for Twitch (powered by Voicevox)",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "TwitchのコメントをVOICEVOXで読み上げる拡張機能です。",
   "permissions": [
     "storage",
@@ -9,6 +9,7 @@
   ],
   "host_permissions": [
     "http://127.0.0.1:50021/*",
+    "http://localhost:50021/*",
     "*://dashboard.twitch.tv/*"
   ],
   "icons": {
