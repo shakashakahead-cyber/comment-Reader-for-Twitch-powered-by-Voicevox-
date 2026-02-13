@@ -9,7 +9,8 @@ let isPlaying = false;
 const UNIQUE_ID_DEDUP_TTL_MS = 30 * 1000;
 const uniqueIdsInQueue = new Set();
 const recentUniqueIds = new Map();
-const failedSinkIds = new Set();
+const SINK_ID_RETRY_COOLDOWN_MS = 30 * 1000;
+const failedSinkIds = new Map();
 let hasLoggedSinkIdUnsupported = false;
 
 function getVoicevoxBaseCandidates() {
@@ -43,6 +44,18 @@ function shortDeviceId(deviceId) {
     if (!deviceId) return "<default>";
     if (deviceId.length <= 12) return deviceId;
     return `${deviceId.slice(0, 6)}...${deviceId.slice(-4)}`;
+}
+
+function shouldRetrySinkId(deviceId, now = Date.now()) {
+    const failedAt = failedSinkIds.get(deviceId);
+    if (!failedAt) return true;
+
+    if ((now - failedAt) >= SINK_ID_RETRY_COOLDOWN_MS) {
+        failedSinkIds.delete(deviceId);
+        return true;
+    }
+
+    return false;
 }
 
 async function fetchVoicevox(path, init = {}) {
@@ -162,11 +175,12 @@ async function playAudio(blob, volume, deviceId) {
         const normalizedDeviceId = normalizeDeviceId(deviceId);
 
         if (normalizedDeviceId && typeof audio.setSinkId === 'function') {
-            if (!failedSinkIds.has(normalizedDeviceId)) {
+            if (shouldRetrySinkId(normalizedDeviceId)) {
                 try {
                     await audio.setSinkId(normalizedDeviceId);
+                    failedSinkIds.delete(normalizedDeviceId);
                 } catch (e) {
-                    failedSinkIds.add(normalizedDeviceId);
+                    failedSinkIds.set(normalizedDeviceId, Date.now());
                     console.warn(
                         `[AudioOutput] Failed to set sinkId "${shortDeviceId(normalizedDeviceId)}". ` +
                         `Falling back to default output. ${describeError(e)}`
