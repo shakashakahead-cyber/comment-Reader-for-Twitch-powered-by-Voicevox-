@@ -23,13 +23,23 @@ const REPLY_CONTEXT_SELECTORS = [
     '[data-test-selector*="reply"]',
     '[data-a-target*="reply"]',
     '.reply-line--mentioned-comment-author',
-    '.reply-line--mentioned-comment-text'
+    '.reply-line--mentioned-comment-text',
+    '[class*="reply-line"]',
+    '[class*="mentioned-comment"]',
+    '[data-test-selector*="mentioned-comment"]',
+    '[data-a-target*="mentioned-comment"]'
 ];
 
 const REPLY_TARGET_AUTHOR_SELECTORS = [
     '.reply-line--mentioned-comment-author',
     '[data-test-selector*="reply-author"]',
     '[data-a-target*="reply-author"]'
+];
+
+const REPLY_QUOTED_TEXT_SELECTORS = [
+    '.reply-line--mentioned-comment-text',
+    '[data-test-selector*="mentioned-comment-text"]',
+    '[data-a-target*="mentioned-comment-text"]'
 ];
 
 export class MessageProcessor {
@@ -75,6 +85,22 @@ export class MessageProcessor {
         );
     }
 
+    normalizeSpeechText(text) {
+        return String(text ?? "")
+            .replace(/\u00A0/g, " ")
+            .replace(/\r\n?/g, "\n")
+            .split("\n")
+            .map(line => line.replace(/\s+/g, " ").trim())
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+    }
+
+    isElementInsideAnySelector(element, selectors) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+        return selectors.some(selector => !!element.closest(selector));
+    }
+
     sanitizeReplyTargetUsername(name) {
         let sanitized = String(name ?? "").trim();
         if (!sanitized) return "";
@@ -82,6 +108,23 @@ export class MessageProcessor {
         sanitized = sanitized.replace(/^[@＠]+/, "");
         sanitized = sanitized.replace(/[,:：、。.!?！？]+$/g, "");
         return sanitized.trim();
+    }
+
+    extractReplyQuotedText(element) {
+        if (!element || element.nodeType !== Node.ELEMENT_NODE) return "";
+
+        for (const selector of REPLY_QUOTED_TEXT_SELECTORS) {
+            const candidate = (typeof element.matches === "function" && element.matches(selector))
+                ? element
+                : element.querySelector(selector);
+
+            if (!candidate) continue;
+
+            const candidateText = this.normalizeSpeechText(candidate.textContent || candidate.innerText || "");
+            if (candidateText) return candidateText;
+        }
+
+        return "";
     }
 
     extractReplyTargetFromElement(element) {
@@ -129,6 +172,94 @@ export class MessageProcessor {
         return remaining.trim();
     }
 
+    extractBodyFromMessageFragments(sourceElement) {
+        if (!sourceElement || sourceElement.nodeType !== Node.ELEMENT_NODE) return "";
+
+        const fragments = [];
+        const walker = document.createTreeWalker(sourceElement, NodeFilter.SHOW_TEXT);
+
+        let currentNode = walker.nextNode();
+        while (currentNode) {
+            const parent = currentNode.parentElement;
+            const value = String(currentNode.nodeValue || "");
+
+            if (parent && value.trim()) {
+                const isBaseNode = this.isElementInsideAnySelector(parent, BASE_REMOVE_SELECTORS);
+                const isReplyNode = this.isElementInsideAnySelector(parent, REPLY_CONTEXT_SELECTORS);
+
+                if (!isBaseNode && !isReplyNode) {
+                    fragments.push(value);
+                }
+            }
+
+            currentNode = walker.nextNode();
+        }
+
+        return this.normalizeSpeechText(fragments.join("\n"));
+    }
+
+    stripReplyQuotedPrefix(text, replyQuotedText) {
+        const normalizedText = this.normalizeSpeechText(text);
+        const normalizedReplyQuotedText = this.normalizeSpeechText(replyQuotedText);
+
+        if (!normalizedReplyQuotedText) return normalizedText;
+        if (!normalizedText) return "";
+        if (normalizedText === normalizedReplyQuotedText) return "";
+
+        if (normalizedText.startsWith(normalizedReplyQuotedText)) {
+            return normalizedText
+                .slice(normalizedReplyQuotedText.length)
+                .replace(/^[\s:：>＞\-–—|｜、。,.!?！？]+/, "")
+                .trim();
+        }
+
+        return normalizedText;
+    }
+
+    isLikelyReplyContextLine(line, replyTargetUsername, replyQuotedText) {
+        const normalizedLine = this.normalizeSpeechText(line);
+        if (!normalizedLine) return false;
+
+        const normalizedReplyQuotedText = this.normalizeSpeechText(replyQuotedText);
+        if (normalizedReplyQuotedText) {
+            if (normalizedLine === normalizedReplyQuotedText) return true;
+            if (
+                normalizedLine.length >= 8 &&
+                normalizedReplyQuotedText.startsWith(normalizedLine)
+            ) {
+                return true;
+            }
+        }
+
+        const normalizedTarget = this.sanitizeReplyTargetUsername(replyTargetUsername);
+        if (normalizedTarget) {
+            const escapedTarget = escapeRegExp(normalizedTarget);
+            const targetLinePattern = new RegExp(`^[@＠]?${escapedTarget}[\\s:：,、。.!?！？]*$`, "i");
+            if (targetLinePattern.test(normalizedLine)) return true;
+        }
+
+        return /^[>＞]/.test(normalizedLine);
+    }
+
+    stripLeadingReplyContextLine(text, replyTargetUsername, replyQuotedText) {
+        const normalizedText = this.normalizeSpeechText(text);
+        if (!normalizedText) return "";
+
+        const lines = normalizedText
+            .split("\n")
+            .map(line => line.trim())
+            .filter(Boolean);
+
+        if (lines.length < 2) return normalizedText;
+
+        const [firstLine, ...restLines] = lines;
+        if (!this.isLikelyReplyContextLine(firstLine, replyTargetUsername, replyQuotedText)) {
+            return lines.join("\n");
+        }
+
+        return restLines.join("\n").trim();
+    }
+
     extractMessageTextAndReplyMeta(container) {
         const bodyElement = container.querySelector(MESSAGE_BODY_SELECTOR);
         const sourceElement = bodyElement || container;
@@ -139,6 +270,11 @@ export class MessageProcessor {
             replyTargetUsername = this.extractReplyTargetFromElement(container);
         }
 
+        let replyQuotedText = this.extractReplyQuotedText(sourceElement);
+        if (!replyQuotedText) {
+            replyQuotedText = this.extractReplyQuotedText(container);
+        }
+
         const isReply = this.hasReplyContext(sourceElement) || this.hasReplyContext(container);
 
         const removeSelectors = [...BASE_REMOVE_SELECTORS, ...REPLY_CONTEXT_SELECTORS];
@@ -146,7 +282,9 @@ export class MessageProcessor {
             clone.querySelectorAll(selector).forEach(element => element.remove());
         });
 
-        const rawText = String(clone.innerText || "").trim();
+        const candidateFromClone = this.normalizeSpeechText(clone.innerText || "");
+        const candidateFromFragments = this.extractBodyFromMessageFragments(sourceElement);
+        const rawText = candidateFromFragments || candidateFromClone;
         let text = rawText;
 
         if (isReply) {
@@ -155,13 +293,19 @@ export class MessageProcessor {
                 replyTargetUsername = leadingMention.username;
             }
 
+            if (replyQuotedText) {
+                text = this.stripReplyQuotedPrefix(text, replyQuotedText);
+            }
+
             if (replyTargetUsername) {
                 text = this.stripLeadingMentionsForTarget(text, replyTargetUsername);
             }
+
+            text = this.stripLeadingReplyContextLine(text, replyTargetUsername, replyQuotedText);
         }
 
         return {
-            text: text.trim(),
+            text: this.normalizeSpeechText(text),
             rawText,
             isReply,
             replyTargetUsername
@@ -304,12 +448,10 @@ export class MessageProcessor {
     buildSpeakText(text, username, isReply, replyTargetUsername) {
         const prefixes = [];
 
-        if (this.config.readName) {
-            prefixes.push(this.buildDisplayNameForSpeech(username));
-        }
-
         if (isReply && replyTargetUsername) {
             prefixes.push(this.buildDisplayNameForSpeech(replyTargetUsername));
+        } else if (this.config.readName) {
+            prefixes.push(this.buildDisplayNameForSpeech(username));
         }
 
         return `${prefixes.join("")}${this.buildSpeakBody(text)}`;
