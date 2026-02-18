@@ -206,14 +206,23 @@ export class MessageProcessor {
         if (!normalizedText) return "";
         if (normalizedText === normalizedReplyQuotedText) return "";
 
-        if (normalizedText.startsWith(normalizedReplyQuotedText)) {
-            return normalizedText
-                .slice(normalizedReplyQuotedText.length)
-                .replace(/^[\s:：>＞\-–—|｜、。,.!?！？]+/, "")
-                .trim();
+        if (!normalizedText.startsWith(normalizedReplyQuotedText)) {
+            return normalizedText;
         }
 
-        return normalizedText;
+        const trailingSegment = normalizedText.slice(normalizedReplyQuotedText.length);
+        const boundaryMatch = trailingSegment.match(/^[\s:：>＞\-–—|｜、。,.!?！？]*/);
+        const boundaryToken = boundaryMatch ? boundaryMatch[0] : "";
+        const hasStrongBoundary = boundaryToken.includes("\n");
+
+        if (!hasStrongBoundary) {
+            return normalizedText;
+        }
+
+        return trailingSegment
+            .slice(boundaryToken.length)
+            .replace(/^[\s:：>＞\-–—|｜、。,.!?！？]+/, "")
+            .trim();
     }
 
     isLikelyReplyContextLine(line, replyTargetUsername, replyQuotedText) {
